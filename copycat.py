@@ -5,6 +5,8 @@ import threading
 import tkinter as tk
 from pynput import keyboard, mouse
 
+# compile: nuitka --standalone --onefile --enable-plugin=tk-inter --plugin-enable=pylint-warnings copycat.py
+
 # Список для хранения событий
 events = []
 recording = False
