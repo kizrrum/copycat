@@ -4,7 +4,26 @@ import time
 import threading
 import tkinter as tk
 from pynput import keyboard, mouse
+import ctypes
+import sys
 
+def is_admin():
+    if os.name == 'nt':  # Если это Windows
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except:
+            return False
+    elif os.name == 'posix':  # Если это Linux или другая Unix-подобная система
+        return os.geteuid() == 0  # Проверяет, запущен ли процесс от имени root
+    else:
+        return False
+
+if not is_admin():
+    if os.name == 'nt':  # Для Windows
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+    elif os.name == 'posix':  # Для Linux
+        print("Для выполнения этой программы необходимы права суперпользователя. Перезапустите её с использованием 'sudo'.")
+    sys.exit()
 # compile: nuitka --standalone --onefile --enable-plugin=tk-inter --plugin-enable=pylint-warnings copycat.py
 
 # Список для хранения событий
