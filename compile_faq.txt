@@ -1,0 +1,16 @@
+
+C:\tmp\python\copycat> cythonize -i C:\tmp\python\copycat\copycat.py
+
+
+c:\tmp\python\copycat>python setup.py build_ext --inplace
+
+setup.py
+
+from setuptools import setup
+from Cython.Build import cythonize
+
+setup(
+    ext_modules=cythonize("copycat.py"),  # Укажите ваш файл
+)
+
+pyinstaller --onefile --noconsole copycat.py
