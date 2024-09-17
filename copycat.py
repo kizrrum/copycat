@@ -168,15 +168,27 @@ def create_gui():
     replay_button = tk.Button(frame, text="Replay Events", command=replay_events, width=20, bg='#555555', fg='#FFFFFF')
     replay_button.grid(row=0, column=2, padx=5, pady=5)  # Размещаем кнопку в сетке
 
+    # Создаем фрейм для текстового поля и полосы прокрутки
+    text_frame = tk.Frame(root)
+    text_frame.pack(pady=10)  # Упаковываем фрейм в окно
+
     # Текстовое поле для вывода сообщений
-    text_output = tk.Text(root, height=10, width=60, bg='#1E1E1E', fg='#FFFFFF', insertbackground='white')
-    text_output.pack(pady=10)  # Упаковываем текстовое поле в окно
+    text_output = tk.Text(text_frame, height=10, width=60, bg='#1E1E1E', fg='#FFFFFF', insertbackground='white')
+    text_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)  # Упаковываем текстовое поле
+
+    # Полоса прокрутки
+    scrollbar = tk.Scrollbar(text_frame, command=text_output.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)  # Упаковываем полосу прокрутки
+
+    # Связываем текстовое поле с полосой прокрутки
+    text_output.config(yscrollcommand=scrollbar.set)
 
     # Привязка закрытия окна к завершению слушателей
     root.protocol("WM_DELETE_WINDOW", on_closing)
 
     # Запуск основного цикла обработки событий
     root.mainloop()
+
 
 # Установка слушателей для мыши
 listener_click = mouse.Listener(on_click=on_click, on_move=on_move)
