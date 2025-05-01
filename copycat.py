@@ -1,209 +1,229 @@
-import os  # Модуль для работы с операционной системой
-import pickle  # Модуль для сериализации и десериализации объектов Python
-import time  # Модуль для работы с временем
-import threading  # Модуль для работы с потоками
-import tkinter as tk  # Модуль для создания графического интерфейса
-from pynput import keyboard, mouse  # Модули для отслеживания событий клавиатуры и мыши
-import ctypes  # Модуль для работы с C-совместимыми типами данных
-import sys  # Модуль для доступа к некоторым параметрам и функциям Python
+import os
+import pickle
+import time
+import threading
+import tkinter as tk
+from pynput import keyboard, mouse
+import ctypes
+import sys
 
-# Функция для проверки наличия прав администратора
+# --- Проверка прав администратора ---
 def is_admin():
-    if os.name == 'nt':  # Если это Windows
+    if os.name == 'nt':
         try:
-            return ctypes.windll.shell32.IsUserAnAdmin()  # Проверяем права администратора
+            return ctypes.windll.shell32.IsUserAnAdmin()
         except:
             return False
-    elif os.name == 'posix':  # Если это Linux или другая Unix-подобная система
-        return os.geteuid() == 0  # Проверяет, запущен ли процесс от имени root
+    elif os.name == 'posix':
+        return os.geteuid() == 0
     else:
         return False
 
-# Проверяем, запущена ли программа с правами администратора
 if not is_admin():
-    if os.name == 'nt':  # Для Windows
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
-    elif os.name == 'posix':  # Для Linux
-        print("Для выполнения этой программы необходимы права суперпользователя. Перезапустите её с использованием 'sudo'.")
-    sys.exit()  # Завершаем программу, если нет прав
+    if os.name == 'nt':
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable,
+            " ".join(sys.argv), None, 1)
+    else:
+        print("Требуются права суперпользователя. Перезапустите с sudo.")
+    sys.exit()
 
-# compile: nuitka --standalone --onefile --enable-plugin=tk-inter --plugin-enable=pylint-warnings copycat.py
-# Команда для компиляции скрипта в исполняемый файл
-
-# Список для хранения событий
+# --- Глобальные переменные ---
 events = []
-recording = False  # Флаг для проверки, идет ли запись
-start_time = None  # Время начала записи
-
-# Набор для отслеживания удерживаемых клавиш
+recording = False
+replaying = False
+start_time = None
+stop_flag = False   # один флаг для всего
 pressed_keys = set()
+loop_var = None
+text_output = None
 
-# Обработчик событий мыши
+# --- Обработчики событий клавиатуры и мыши ---
 def on_click(x, y, button, pressed):
-    if recording:  # Если идет запись
-        elapsed_time = time.time() - start_time  # Вычисляем прошедшее время
-        events.append(('click', x, y, button, pressed, elapsed_time))  # Добавляем событие в список
+    if recording and not stop_flag:
+        elapsed = time.time() - start_time
+        events.append(('click', x, y, button, pressed, elapsed))
 
 def on_move(x, y):
-    if recording:  # Если идет запись
-        elapsed_time = time.time() - start_time  # Вычисляем прошедшее время
-        events.append(('move', x, y, elapsed_time))  # Добавляем событие в список
+    if recording and not stop_flag:
+        elapsed = time.time() - start_time
+        events.append(('move', x, y, elapsed))
 
-# Обработчик событий клавиатуры
 def on_press(key):
-    global recording, start_time
-    if recording:  # Если идет запись
-        elapsed_time = time.time() - start_time  # Вычисляем прошедшее время
-        
-        if hasattr(key, 'char') and key.char:  # Если клавиша имеет символ
-            events.append(('key_press', key.char, elapsed_time))  # Добавляем событие нажатия символа
-        elif key not in pressed_keys:  # Если клавиша не удерживается
-            pressed_keys.add(key)  # Добавляем клавишу в набор удерживаемых
-            current_combo = tuple(pressed_keys)  # Создаем кортеж из удерживаемых клавиш
-            events.append(('key_combo_press', current_combo, elapsed_time))  # Добавляем событие комбинации клавиш
+    global stop_flag, recording, replaying
+    if key == keyboard.Key.f12:
+        stop_flag = True
+        text_output.insert(tk.END, "🛑 Нажата F12 — останавливаем всё\n")
+        text_output.see(tk.END)
+        # если шли запись или воспроизведение, завершаем их
+        if recording:
+            recording = False
+            save_events()
+        # replay_loop внутри сам завершится при проверке stop_flag
 
 def on_release(key):
-    global recording
-    if recording:  # Если идет запись
-        elapsed_time = time.time() - start_time  # Вычисляем прошедшее время
-        if key in pressed_keys:  # Если клавиша удерживалась
-            pressed_keys.remove(key)  # Убираем клавишу из набора удерживаемых
-            events.append(('key_release', key, elapsed_time))  # Добавляем событие отпускания клавиши
+    if recording and key in pressed_keys and not stop_flag:
+        pressed_keys.remove(key)
+        events.append(('key_release', key, time.time() - start_time))
 
-# Функция для начала записи
+# --- Утилиты ---
+def save_events():
+    with open('events.pkl', 'wb') as f:
+        pickle.dump(events, f)
+    text_output.insert(tk.END, "События сохранены в 'events.pkl'.\n")
+    text_output.see(tk.END)
+
+# --- Запись ---
 def start_recording():
-    global recording, start_time, events
-    recording = True  # Устанавливаем флаг записи
-    start_time = time.time()  # Запоминаем время начала
-    events = []  # Очищаем список событий
-    text_output.insert(tk.END, "Recording started...\n")  # Выводим сообщение в текстовое поле
+    global recording, start_time, events, stop_flag
+    stop_flag = False
+    recording = True
+    start_time = time.time()
+    events.clear()
+    text_output.insert(tk.END, "🔴 Запись началась (F12 для остановки)\n")
+    text_output.see(tk.END)
+    threading.Thread(target=record_loop, daemon=True).start()
 
-# Функция для остановки записи
+def record_loop():
+    global recording
+    # цикл записи
+    while recording and not stop_flag:
+        time.sleep(0.01)  # минимальная задержка, события ловятся слушателем
+    if recording and stop_flag:
+        # если остановили F12
+        recording = False
+        save_events()
+
 def stop_recording():
     global recording
-    recording = False  # Сбрасываем флаг записи
-    text_output.insert(tk.END, "Recording stopped.\n")  # Выводим сообщение в текстовое поле
-    with open('events.pkl', 'wb') as f:  # Открываем файл для записи
-        pickle.dump(events, f)  # Сохраняем события в файл
-    text_output.insert(tk.END, "Events saved to 'events.pkl'.\n")  # Выводим сообщение о сохранении
+    if recording:
+        recording = False
+        text_output.insert(tk.END, "⏹ Остановка записи (кнопка)\n")
+        text_output.see(tk.END)
+        save_events()
 
-
-# Функция для воспроизведения записанных событий
+# --- Воспроизведение ---
 def replay_events():
-    def replay():
-        if not os.path.exists('events.pkl'):  # Проверяем, существует ли файл
-            text_output.insert(tk.END, "No events to replay. Record some events first.\n")  # Выводим сообщение, если файл не найден
+    global stop_flag, replaying
+    if replaying:
+        return
+    stop_flag = False
+    replaying = True
+    text_output.insert(tk.END, "▶ Воспроизведение началось (F12 для стопа)\n")
+    text_output.see(tk.END)
+    threading.Thread(target=replay_loop, daemon=True).start()
+
+def replay_loop():
+    global replaying
+    try:
+        if not os.path.exists('events.pkl'):
+            text_output.insert(tk.END, "Нет файла 'events.pkl'. Сначала запишите события.\n")
+            text_output.see(tk.END)
+            replaying = False
             return
 
-        text_output.insert(tk.END, "Replaying events...\n")  # Выводим сообщение о начале воспроизведения
-        with open('events.pkl', 'rb') as f:  # Открываем файл для чтения
-            events = pickle.load(f)  # Загружаем события из файла
+        with open('events.pkl', 'rb') as f:
+            loaded_events = pickle.load(f)
 
-        keyboard_controller = keyboard.Controller()  # Создаем контроллер клавиатуры
-        mouse_controller = mouse.Controller()  # Создаем контроллер мыши
+        kb = keyboard.Controller()
+        ms = mouse.Controller()
 
-        start_time = events[0][-1]  # Начальное время первого события
+        first_time = loaded_events[0][-1] if loaded_events else 0
+        while not stop_flag:
+            for event in loaded_events:
+                if stop_flag:
+                    break
+                etype = event[0]
+                delay = event[-1]
+                time.sleep(max(0, delay - first_time))
+                first_time = delay
 
-        for event in events:  # Проходим по всем событиям
-            event_type = event[0]  # Тип события
-            delay_time = event[-1]  # Задержка времени
-            time.sleep(delay_time - start_time)  # Ждем до следующего события
-            start_time = delay_time
+                if etype == 'move':
+                    ms.position = (event[1], event[2])
+                elif etype == 'click':
+                    ms.position = (event[1], event[2])
+                    if event[4]:
+                        ms.press(event[3])
+                    else:
+                        ms.release(event[3])
+                elif etype == 'key_press':
+                    kb.type(event[1])
+                elif etype == 'key_release':
+                    kb.release(event[1])
+                elif etype == 'key_combo_press':
+                    for k in event[1]:
+                        kb.press(k)
 
-            if event_type == 'move':  # Если событие перемещения мыши
-                x, y = event[1], event[2]
-                mouse_controller.position = (x, y)  # Устанавливаем позицию мыши
-            elif event_type == 'click':  # Если событие клика мыши
-                x, y, button, pressed = event[1], event[2], event[3], event[4]
-                mouse_controller.position = (x, y)
-                if pressed:
-                    mouse_controller.press(button)  # Нажимаем кнопку мыши
-                else:
-                    mouse_controller.release(button)  # Отпускаем кнопку мыши
-            elif event_type == 'key_combo_press':  # Если событие комбинации клавиш
-                combo = event[1]
-                for key in combo:
-                    keyboard_controller.press(key)  # Нажимаем каждую клавишу в комбинации
-            elif event_type == 'key_release':  # Если событие отпускания клавиши
-                key = event[1]
-                keyboard_controller.release(key)  # Отпускаем клавишу
-            elif event_type == 'key_press':  # Если событие нажатия клавиши
-                char = event[1]
-                keyboard_controller.type(char)  # Печатаем символ
+                text_output.insert(tk.END, f"Воспроизведено: {event}\n")
+                text_output.see(tk.END)
 
-            # Выводим действие в текстовое поле
-            text_output.insert(tk.END, f"Replayed event: {event}\n")
+            if not loop_var.get() or stop_flag:
+                break
+            time.sleep(0.1)
+    except Exception as e:
+        text_output.insert(tk.END, f"Ошибка воспроизведения: {e}\n")
+        text_output.see(tk.END)
+    finally:
+        replaying = False
+        text_output.insert(tk.END, "🛑 Воспроизведение остановлено\n")
+        text_output.see(tk.END)
 
-    # Запуск воспроизведения в отдельном потоке
-    threading.Thread(target=replay).start()
-
-# Функция для завершения программы при закрытии окна
+# --- Закрытие ---
 def on_closing():
-    listener_click.stop()  # Останавливаем слушатель мыши
-    keyboard_listener.stop()  # Останавливаем слушатель клавиатуры
-    root.destroy()  # Закрываем окно
+    listener.click_listener.stop()
+    listener.key_listener.stop()
+    root.destroy()
 
-# Создание GUI с использованием tkinter
+# --- GUI ---
 def create_gui():
-    global root, text_output
-    
-    root = tk.Tk()  # Создаем главное окно
-    root.title("copycat")  # Устанавливаем заголовок окна
+    global root, text_output, loop_var, listener
+    root = tk.Tk()
+    root.title("copycat")
+    root.configure(bg='#2E2E2E')
 
-    # Настройки для темной темы
-    root.configure(bg='#2E2E2E')  # Устанавливаем цвет фона
+    frame = tk.Frame(root, bg='#2E2E2E')
+    frame.pack(padx=10, pady=10)
 
-    frame = tk.Frame(root, bg='#2E2E2E')  # Создаем фрейм
-    frame.pack(pady=10, padx=10)  # Упаковываем фрейм в окно
+    tk.Button(frame, text="Начать запись", command=start_recording,
+              bg='#555555', fg='white').grid(row=0, column=0, padx=5, pady=5)
+    tk.Button(frame, text="Остановить запись", command=stop_recording,
+              bg='#555555', fg='white').grid(row=0, column=1, padx=5, pady=5)
+    tk.Button(frame, text="Воспроизвести", command=replay_events,
+              bg='#555555', fg='white').grid(row=0, column=2, padx=5, pady=5)
 
-    # Кнопка "Start Recording"
-    start_button = tk.Button(frame, text="Start Recording", command=start_recording, width=20, bg='#555555', fg='#FFFFFF')
-    start_button.grid(row=0, column=0, padx=5, pady=5)  # Размещаем кнопку в сетке
+    loop_var = tk.BooleanVar(value=False)
+    tk.Checkbutton(frame, text="Цикл", variable=loop_var,
+                   bg='#2E2E2E', fg='white', selectcolor='#444444')\
+       .grid(row=1, column=0, columnspan=3, pady=5)
 
-    # Кнопка "Stop Recording"
-    stop_button = tk.Button(frame, text="Stop Recording", command=stop_recording, width=20, bg='#555555', fg='#FFFFFF')
-    stop_button.grid(row=0, column=1, padx=5, pady=5)  # Размещаем кнопку в сетке
+    tk.Label(frame,
+             text="Горячая клавиша: F12 — стоп для записи/воспроизведения",
+             bg='#2E2E2E', fg='gray', font=("Arial", 9))\
+      .grid(row=2, column=0, columnspan=3, pady=5)
 
-    # Кнопка "Replay Events"
-    replay_button = tk.Button(frame, text="Replay Events", command=replay_events, width=20, bg='#555555', fg='#FFFFFF')
-    replay_button.grid(row=0, column=2, padx=5, pady=5)  # Размещаем кнопку в сетке
+    log_frame = tk.Frame(root, bg='#2E2E2E')
+    log_frame.pack(padx=10, pady=10)
 
-    # Создаем фрейм для текстового поля и полосы прокрутки
-    text_frame = tk.Frame(root)
-    text_frame.pack(pady=10)  # Упаковываем фрейм в окно
+    text_output = tk.Text(log_frame, height=10, width=60,
+                          bg='#1E1E1E', fg='white', insertbackground='white')
+    text_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    # Текстовое поле для вывода сообщений
-    text_output = tk.Text(text_frame, height=10, width=60, bg='#1E1E1E', fg='#FFFFFF', insertbackground='white')
-    text_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)  # Упаковываем текстовое поле
-
-    # Полоса прокрутки
-    scrollbar = tk.Scrollbar(text_frame, command=text_output.yview)
-    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)  # Упаковываем полосу прокрутки
-
-    # Связываем текстовое поле с полосой прокрутки
+    scrollbar = tk.Scrollbar(log_frame, command=text_output.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     text_output.config(yscrollcommand=scrollbar.set)
 
-    # Привязка закрытия окна к завершению слушателей
     root.protocol("WM_DELETE_WINDOW", on_closing)
 
-    # Запуск основного цикла обработки событий
+    # запускаем слушатели
+    listener = lambda: None
+    listener.click_listener = mouse.Listener(on_click=on_click, on_move=on_move)
+    listener.click_listener.daemon = True
+    listener.click_listener.start()
+
+    listener.key_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.key_listener.daemon = True
+    listener.key_listener.start()
+
     root.mainloop()
 
-
-# Установка слушателей для мыши
-listener_click = mouse.Listener(on_click=on_click, on_move=on_move)
-listener_click.start()  # Запуск слушателя мыши
-
-# Прослушивание клавиш в отдельном потоке
-def listen_keyboard():
-    global keyboard_listener
-    keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-    keyboard_listener.start()  # Запуск слушателя клавиатуры
-    keyboard_listener.join()  # Ожидание завершения потока
-
-# Запуск прослушивания клавиш в отдельном потоке
-keyboard_thread = threading.Thread(target=listen_keyboard)
-keyboard_thread.start()  # Запуск потока для слушателя клавиатуры
-
-# Запуск GUI
-create_gui()  # Создание и запуск графического интерфейса
+if __name__ == "__main__":
+    create_gui()
